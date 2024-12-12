@@ -1,71 +1,108 @@
 import xml.etree.ElementTree as ET
 import numpy as np
 import pandas as pd
+from pathlib import Path
+
 
 def process_xml(filename):
-    tree = ET.parse(filename)
-    root = tree.getroot()
-
-    labels = []
-    for child in root:
-        print(child.tag[-5:])
-        if child.tag[-5:] == 'label':
-            labels.append(child.attrib['name'])
-    print(labels)
-    return labels
+    """处理XML文件获取标签"""
+    try:
+        tree = ET.parse(filename)
+        root = tree.getroot()
+        # 使用列表推导式替代循环
+        labels = [child.attrib['name'] for child in root if child.tag.endswith('label')]
+        return labels
+    except Exception as e:
+        print(f"Error processing XML file: {e}")
+        return []
 
 
 def process_arff(filename, labels):
+    """处理ARFF文件获取属性和标签数据"""
+    try:
+        # 一次性读取文件内容
+        with open(filename, 'r') as fp:
+            lines = fp.readlines()
 
-    with open(filename, 'r') as fp:
-        file_content = fp.readlines()
+        # 处理属性
+        attributes = []
+        data_start = 0
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if line.startswith('@attribute '):
+                attr_name = line.split()[1]
+                attributes.append(attr_name)
+            elif line.startswith('@data'):
+                data_start = i + 1
+                break
 
-    # 处理表头
-    attributes = []
-    attribute_prefix_len = len('@attribute ')
-    for line in file_content:
-        if line.startswith('@attribute '):
-            line_array = line[attribute_prefix_len:].split()
-            col_name = line_array[0]
-            attributes.append(col_name)
-    attributes = attributes[: -1*len(labels)]
-    print(attributes)
+        # 移除标签属性
+        attributes = attributes[:-len(labels)]
 
-    rows = []
-    data_idx = 0
-    for line in file_content:
-        if line.startswith('@data'):
-            break
-        data_idx = data_idx + 1
+        # 处理数据
+        total_cols = len(attributes) + len(labels)
+        rows = []
 
-    for line in file_content[data_idx+1:]:
-        if line.startswith('{'):
-            line = line.replace('{', '').replace('}', '')
-        line = line.strip()
-        row = line.split(',')
-        rows.append(row)
+        for line in lines[data_start:]:
+            line = line.strip()
+            if not line:
+                continue
 
-    rows = np.array(rows)
-    attributes_df = pd.DataFrame(rows[:, :-1*len(labels)], columns=attributes)
-    labels_df = pd.DataFrame(rows[:, -1*len(labels):], columns=labels)
-    return attributes_df, labels_df
+            if line.startswith('{'):
+                # 稀疏格式处理
+                row = np.zeros(total_cols)
+                elements = line.strip('{}').split(', ')
+                for element in elements:
+                    if element:
+                        idx, val = element.split()
+                        row[int(idx)] = float(val)
+            else:
+                # 密集格式处理
+                row = np.array(line.split(','), dtype=float)
 
-# 用于转化arff文件转化为csv文件
-# 保证多标签数据集要有arff文件和xml文件
-# arff文件存储属性,标签,数据
-# xml文件存储标签,用于在arff文件中识别标签
+            rows.append(row)
+
+        # 使用numpy的高效操作
+        data_array = np.array(rows)
+
+        # 创建DataFrame
+        attributes_df = pd.DataFrame(data_array[:, :len(attributes)], columns=attributes)
+        labels_df = pd.DataFrame(data_array[:, -len(labels):], columns=labels)
+
+        return attributes_df, labels_df
+
+    except Exception as e:
+        print(f"Error processing ARFF file: {e}")
+        return None, None
+
+
+def main():
+    """主函数"""
+    try:
+        # 使用pathlib处理路径
+        base_path = Path('./arts')
+        label_xml = base_path / 'Arts1.xml'
+        arff_file = base_path / 'Arts1.arff'
+        name = 'Arts'
+
+        # 处理文件
+        labels = process_xml(label_xml)
+        if not labels:
+            raise ValueError("No labels found in XML file")
+
+        att_df, lab_df = process_arff(arff_file, labels)
+        if att_df is None or lab_df is None:
+            raise ValueError("Error processing ARFF file")
+
+        # 保存结果
+        att_df.to_csv(base_path / f'{name}-attributes.csv', index=False)
+        lab_df.to_csv(base_path / f'{name}-labels.csv', index=False)
+
+        print("Processing completed successfully!")
+
+    except Exception as e:
+        print(f"Error in main process: {e}")
+
+
 if __name__ == '__main__':
-    # xml文件路径
-    label_xml = './nuswide-cVLADplus/nus-wide-full-cVLADplus.xml'
-    # arff文件路径
-    arff = './nuswide-cVLADplus/nus-wide-full-cVLADplus-test.arff'
-    # 数据集名
-    name = 'nuswide-cVLADplus'
-    # 获取标签列表
-    labels = process_xml(label_xml)
-    # 获取属性集和标签集
-    att_df, lab_df = process_arff(arff, labels)
-
-    # 分布写入csv文件,便于Python/Matlab实验使用
-    att_df.to_csv('./nuswide-cVLADplus/nus-wide-full-cVLADplus-test-attributes.csv', index=False)
-    lab_df.to_csv('./nuswide-cVLADplus/nus-wide-full-cVLADplus-test-labels.csv', index=False)
+    main()
